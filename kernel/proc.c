@@ -55,6 +55,8 @@ procinit(void)
       initlock(&p->lock, "proc");
       p->state = UNUSED;
       p->kstack = KSTACK((int) (p - proc));
+      p->affinity_mask = 0;
+      p->effective_affinity_mask = 0;
   }
 }
 
@@ -124,6 +126,8 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->affinity_mask = 0;
+  p->effective_affinity_mask = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -169,6 +173,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->affinity_mask = 0;
+  p->effective_affinity_mask = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -295,6 +301,7 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->affinity_mask = p->affinity_mask;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -344,7 +351,7 @@ reparent(struct proc *p)
 // An exited process remains in the zombie state
 // until its parent calls wait().
 void
-exit(int status)
+exit(int status, char* exit_msg)
 {
   struct proc *p = myproc();
 
@@ -378,6 +385,11 @@ exit(int status)
   p->xstate = status;
   p->state = ZOMBIE;
 
+  if (exit_msg == 0)
+    strncpy(p->exit_msg, "No exit message", 16);
+  else
+    argstr(1, p->exit_msg, 32);
+
   release(&wait_lock);
 
   // Jump into the scheduler, never to return.
@@ -388,7 +400,7 @@ exit(int status)
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
-wait(uint64 addr)
+wait(uint64 addr, uint64 buffer)
 {
   struct proc *pp;
   int havekids, pid;
@@ -408,6 +420,9 @@ wait(uint64 addr)
         if(pp->state == ZOMBIE){
           // Found one.
           pid = pp->pid;
+
+          copyout(p->pagetable, buffer, (char *)&pp->exit_msg, sizeof(pp->exit_msg));
+
           if(addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate,
                                   sizeof(pp->xstate)) < 0) {
             release(&pp->lock);
@@ -446,6 +461,7 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int id = cpuid();
   
   c->proc = 0;
   for(;;){
@@ -454,14 +470,21 @@ scheduler(void)
 
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
-      if(p->state == RUNNABLE) {
+      if(p->state == RUNNABLE && (p->affinity_mask == 0 || ((1 << id) & p->effective_affinity_mask) > 0)) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
+        printf("Process ID: %d\nCPU ID: %d\n", p->pid, id);
 
+        if (p->affinity_mask != 0)
+          p->effective_affinity_mask ^= (1 << id);
+        if (p->effective_affinity_mask == 0 && p->affinity_mask != 0) {
+          p->effective_affinity_mask = p->affinity_mask;
+        }
+        
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
