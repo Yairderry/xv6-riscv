@@ -11,7 +11,7 @@ sys_exit(void)
 {
   int n;
   argint(0, &n);
-  exit(n, "");
+  exit(n);
   return 0;  // not reached
 }
 
@@ -31,10 +31,8 @@ uint64
 sys_wait(void)
 {
   uint64 p;
-  uint64 buffer;
   argaddr(0, &p);
-  argaddr(1, &buffer);
-  return wait(p, buffer);
+  return wait(p);
 }
 
 uint64
@@ -48,25 +46,6 @@ sys_sbrk(void)
   if(growproc(n) < 0)
     return -1;
   return addr;
-}
-
-uint64
-sys_memsize(void)
-{
-  uint64 size;
-
-  size = myproc()->sz;
-  return size;
-}
-
-uint64
-sys_set_affinity_mask(void)
-{
-  int n;
-  argint(0, &n);
-  myproc()->affinity_mask = n;
-  myproc()->effective_affinity_mask = n;
-  return 0;
 }
 
 uint64
